@@ -1,7 +1,13 @@
-pub mod errors;
+mod errors;
 
 use super::config;
-use std::{fs::File, io::Read, path::PathBuf};
+use crate::markdown;
+pub use errors::ConverterError;
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::PathBuf,
+};
 
 #[derive(Debug)]
 pub struct Converter {
@@ -11,13 +17,46 @@ pub struct Converter {
 }
 
 impl Converter {
-    pub fn open_file(self) -> String {
-        let mut file = File::open(self.input).unwrap();
-
+    pub fn convert(self) -> Result<(), ConverterError> {
+        let mut input_file = File::open(&self.input).unwrap();
         let mut res = String::new();
-        file.read_to_string(&mut res).unwrap();
+        input_file.read_to_string(&mut res).unwrap();
 
-        res
+        let md_doc = markdown::parse(&res).unwrap();
+        self.save_file(&md_doc.to_html())
+    }
+
+    fn save_file(&self, output: &str) -> Result<(), ConverterError> {
+        let mut output_file: File;
+
+        if self.overwrite {
+            output_file = match File::create(&self.output) {
+                Ok(f) => f,
+                Err(_) => {
+                    return Err(ConverterError::UnexpectedErr {
+                        operation: "opening output file in overwrite mode",
+                    });
+                }
+            };
+        } else {
+            output_file = match File::create_new(&self.output) {
+                Ok(f) => f,
+                Err(_) => {
+                    return Err(ConverterError::UnexpectedErr {
+                        operation: "opening output file",
+                    });
+                }
+            };
+        }
+
+        match output_file.write_all(output.as_bytes()) {
+            Ok(_) => return Ok(()),
+            Err(_) => {
+                return Err(ConverterError::UnexpectedErr {
+                    operation: "writing outout to the file",
+                });
+            }
+        }
     }
 }
 

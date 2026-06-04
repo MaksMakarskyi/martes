@@ -15,8 +15,8 @@ fn run() -> Result<(), &'static str> {
 
     let c = converter::Converter::from(config);
 
-    println!("{:?}", &c);
-    println!("\n{}\n", &c.open_file());
-
-    Ok(())
+    match c.convert() {
+        Ok(()) => Ok(()),
+        Err(err) => panic!("{}", err),
+    }
 }
