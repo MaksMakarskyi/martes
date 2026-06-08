@@ -7,7 +7,7 @@ pub enum Block<'a> {
     ATXHeading(ATXHeading<'a>),
     // SetextHeading(&'a str, SetextHeadingLevel),
     IndentedCode(InlineContent<'a>),
-    FencedCode(InlineContent<'a>),
+    FencedCode(FencedCode<'a>),
     // HTML(&'a str),
     // LinkReference(LinkReference<'a>),
     Paragraph(InlineContent<'a>),
@@ -100,3 +100,18 @@ impl<'a> BlockQuote<'a> {
 // pub struct ListItem<'a> {
 //     children: Vec<Block<'a>>,
 // }
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum FenceType {
+    Backtick,
+    Tilda,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct FencedCode<'a> {
+    pub content: InlineContent<'a>,
+    pub language: &'a str,
+    pub ident: usize,
+    pub fence_type: FenceType,
+    pub fence_occ: usize,
+}

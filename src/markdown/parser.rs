@@ -29,26 +29,71 @@ impl<'a> Parser<'a> {
         }
 
         self.close_from(0);
-
         Ok(self.doc.clone())
     }
 
     fn process_line(&mut self, line: &'a str) {
         let mut continuation = line;
-        let mut last_open_idx = 0;
+        let mut close_from = 0;
         for block in self.stack.iter() {
             if let Some(s) = self.try_continue(block, continuation) {
                 continuation = s;
-                last_open_idx += 1;
-            } else {
-                break;
+                close_from += 1;
+                continue;
             }
+
+            // fenced code cannot be continued only in the case it is being closed,
+            // so we close it, and skip the current line immediately, since it contains
+            // only the closing fence (e.g. "~~~" or "```")
+            if let Block::FencedCode(_) = block {
+                self.close_from(close_from);
+                return;
+            }
+
+            break;
         }
 
-        self.close_from(last_open_idx);
-
         if let Some(new_block) = self.try_open(continuation) {
-            self.stack.push(new_block);
+            self.close_from(close_from);
+            self.stack.push(new_block.clone());
+            return;
+        }
+
+        // Remaning empty lines handling
+        if line.trim().is_empty() {
+            if let Some(Block::FencedCode(fc)) = self.stack.last_mut() {
+                let InlineContent::Raw(lines) = &mut fc.content else {
+                    unreachable!("the content must be raw at this point");
+                };
+                lines.push(continuation);
+            }
+
+            return;
+        }
+
+        // Remaning non-empty lines handling
+        if let Some(b) = self.stack.last_mut() {
+            match b {
+                Block::FencedCode(fc) => {
+                    let InlineContent::Raw(lines) = &mut fc.content else {
+                        unreachable!("the content must be raw at this point");
+                    };
+                    lines.push(continuation);
+                }
+                Block::Paragraph(ic) => {
+                    let InlineContent::Raw(lines) = ic else {
+                        unreachable!("the content must be raw at this point");
+                    };
+                    lines.push(continuation);
+                }
+                _ => {
+                    self.stack
+                        .push(Block::Paragraph(InlineContent::Raw(vec![continuation])));
+                }
+            }
+        } else {
+            self.stack
+                .push(Block::Paragraph(InlineContent::Raw(vec![continuation])));
         }
     }
 
@@ -57,14 +102,50 @@ impl<'a> Parser<'a> {
             Block::ThematicBreak => None,
             Block::ATXHeading(_) => None,
             Block::IndentedCode(_) => line.strip_prefix("    "),
-            Block::FencedCode(_) => Some(line),
-            Block::Paragraph(_) => match line.trim() {
-                "" => None,
-                _ => Some(line),
-            },
-
+            Block::FencedCode(_) => self.try_continue_fenced_code(block, line),
+            Block::Paragraph(_) => None,
             Block::BlockQuote(_) => line.strip_prefix("> "),
         }
+    }
+
+    fn try_continue_fenced_code(&self, block: &Block, line: &'a str) -> Option<&'a str> {
+        let Block::FencedCode(fc) = block else {
+            return Some(line);
+        };
+
+        let after_indent = line.trim_start_matches(' ');
+        let indent_size = line.len() - after_indent.len();
+        if indent_size > 3 {
+            return Some(line);
+        }
+
+        let after_tabs = after_indent.trim_start_matches('\t');
+        if after_tabs.len() < after_indent.len() {
+            return Some(line);
+        }
+
+        let fence_type: FenceType;
+        let fence_occ: usize;
+        let mut after_fence = after_tabs.trim_start_matches('~');
+        if after_fence.len() == after_tabs.len() {
+            after_fence = after_tabs.trim_start_matches('`');
+            if after_fence.len() == after_tabs.len() {
+                return Some(line);
+            }
+
+            fence_type = FenceType::Backtick;
+        } else {
+            fence_type = FenceType::Tilda;
+        }
+
+        fence_occ = after_tabs.len() - after_fence.len();
+
+        // Closing sequence found
+        if fence_type == fc.fence_type && fence_occ >= fc.fence_occ {
+            return None;
+        }
+
+        Some(line)
     }
 
     fn try_open(&self, line: &'a str) -> Option<Block<'a>> {
@@ -80,12 +161,18 @@ impl<'a> Parser<'a> {
         if let Some(b) = self.try_open_atx_heading(line) {
             return Some(b);
         }
+        if let Some(b) = self.try_open_fenced_code(line) {
+            return Some(b);
+        }
 
-        None
+        self.try_open_paragraph(line)
     }
 
     fn try_open_idented_code(&self, line: &'a str) -> Option<Block<'a>> {
-        if let Some(Block::Paragraph(_)) = self.stack.iter().last() {
+        if let Some(Block::Paragraph(_)) = self.stack.last() {
+            return None;
+        }
+        if let Some(Block::FencedCode(_)) = self.stack.last() {
             return None;
         }
         if let Some(s) = line.strip_prefix("    ") {
@@ -188,43 +275,97 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    // fn try_open_fenced_code(&self, line: &'a str) -> Option<Block<'a>> {
-    //     None
-    // }
+    fn try_open_fenced_code(&self, line: &'a str) -> Option<Block<'a>> {
+        let after_indent = line.trim_start_matches(' ');
+        let indent_size = line.len() - after_indent.len();
+        if indent_size > 3 {
+            return None;
+        }
 
-    /// Closes open blocks on the stack starting from particular index
+        let after_tabs = after_indent.trim_start_matches('\t');
+        if after_tabs.len() < after_indent.len() {
+            return None;
+        }
+
+        let fence_type: FenceType;
+        let fence_occ: usize;
+        let mut after_fence = after_tabs.trim_start_matches('~');
+        if after_fence.len() == after_tabs.len() {
+            after_fence = after_tabs.trim_start_matches('`');
+            if after_fence.len() == after_tabs.len() {
+                return None;
+            }
+
+            fence_type = FenceType::Backtick;
+        } else {
+            fence_type = FenceType::Tilda;
+        }
+
+        fence_occ = after_tabs.len() - after_fence.len();
+        if fence_occ <= 2 {
+            return None;
+        }
+
+        if let Some(Block::FencedCode(fc)) = self.stack.last() {
+            if fc.fence_occ > fence_occ || fc.fence_type != fence_type {
+                return None;
+            }
+            unreachable!(
+                "the closing fence with enough fence markers must be detected by the try_continue block"
+            );
+        }
+
+        let language = after_fence.trim_start().split(' ').next().unwrap_or("");
+
+        Some(Block::FencedCode(FencedCode {
+            content: InlineContent::Raw(Vec::new()),
+            language: language,
+            ident: indent_size,
+            fence_type: fence_type,
+            fence_occ: fence_occ,
+        }))
+    }
+
+    fn try_open_paragraph(&self, line: &'a str) -> Option<Block<'a>> {
+        if let Some(Block::FencedCode(_)) = self.stack.last() {
+            return None;
+        }
+
+        if line.trim().is_empty() {
+            return None;
+        }
+
+        return Some(Block::Paragraph(InlineContent::Raw(vec![line])));
+    }
+
+    /// Closes open blocks on the stack starting from particular index inclusively
     fn close_from(&mut self, idx: usize) {
-        if idx == self.stack.len() {
+        if self.stack.len() == 0 || idx == self.stack.len() {
             return;
         }
 
-        let mut head = self.stack.pop().unwrap();
-        for _ in self.stack.len()..idx {
-            let next = head;
-            head = self.stack.pop().unwrap();
+        let num_iters = self.stack.len() - idx;
+        for _ in 0..=num_iters {
+            let last = self.stack.pop().unwrap();
 
-            match head {
+            let Some(prev_to_last) = self.stack.last_mut() else {
+                // current last was the top most in the open blocks stack,
+                // since there is no previous to the last
+
+                self.doc.push(last);
+                return;
+            };
+
+            match prev_to_last {
                 Block::BlockQuote(children) => {
-                    let mut children = children.clone();
-                    children.push(next);
-                    head = Block::BlockQuote(children);
+                    children.push(last);
                 }
-                _ => unreachable!(),
+                _ => {
+                    println!("{:?}", self.stack);
+                    println!("{:?}", last);
+                    unreachable!("encountered an unintended block as a parent")
+                }
             }
-        }
-
-        if idx == 0 {
-            self.doc.push(head);
-            return;
-        }
-
-        match self.stack.pop().unwrap() {
-            Block::BlockQuote(children) => {
-                let mut children = children.clone();
-                children.push(head);
-                self.stack.push(Block::BlockQuote(children))
-            }
-            _ => unreachable!(),
         }
     }
 }
@@ -652,28 +793,136 @@ mod tests {
         }
     }
 
-    // #[test]
-    // fn test_try_open_fenced_code() {
-    //     let tests = vec![
-    //         Case {
-    //             name: "few_markers",
-    //             stack: Vec::new(),
-    //             input: "--",
-    //             expected: None,
-    //         },
-    //         Case {
-    //             name: "several_marker_types",
-    //             stack: Vec::new(),
-    //             input: "-*-",
-    //             expected: None,
-    //         },
-    //     ];
+    #[test]
+    fn test_try_open_fenced_code() {
+        let tests = vec![
+            Case {
+                name: "too_many_spaces_before_markers",
+                stack: Vec::new(),
+                input: "    ~~~",
+                expected: None,
+            },
+            Case {
+                name: "tab_before_markers",
+                stack: Vec::new(),
+                input: "\t```",
+                expected: None,
+            },
+            Case {
+                name: "tab_and_spaces_before_markers",
+                stack: Vec::new(),
+                input: " \t ~~~",
+                expected: None,
+            },
+            Case {
+                name: "too_few_markers",
+                stack: Vec::new(),
+                input: "``",
+                expected: None,
+            },
+            Case {
+                name: "tildes",
+                stack: Vec::new(),
+                input: "~~~",
+                expected: Some(Block::FencedCode(FencedCode {
+                    content: InlineContent::Raw(Vec::new()),
+                    language: "",
+                    ident: 0,
+                    fence_type: FenceType::Tilda,
+                    fence_occ: 3,
+                })),
+            },
+            Case {
+                name: "Backticks",
+                stack: Vec::new(),
+                input: "```",
+                expected: Some(Block::FencedCode(FencedCode {
+                    content: InlineContent::Raw(Vec::new()),
+                    language: "",
+                    ident: 0,
+                    fence_type: FenceType::Backtick,
+                    fence_occ: 3,
+                })),
+            },
+            Case {
+                name: "spaces_before_markers",
+                stack: Vec::new(),
+                input: "   ```",
+                expected: Some(Block::FencedCode(FencedCode {
+                    content: InlineContent::Raw(Vec::new()),
+                    language: "",
+                    ident: 3,
+                    fence_type: FenceType::Backtick,
+                    fence_occ: 3,
+                })),
+            },
+            Case {
+                name: "language",
+                stack: Vec::new(),
+                input: " ~~~python",
+                expected: Some(Block::FencedCode(FencedCode {
+                    content: InlineContent::Raw(Vec::new()),
+                    language: "python",
+                    ident: 1,
+                    fence_type: FenceType::Tilda,
+                    fence_occ: 3,
+                })),
+            },
+            Case {
+                name: "language_with_space",
+                stack: Vec::new(),
+                input: " ~~~ rust",
+                expected: Some(Block::FencedCode(FencedCode {
+                    content: InlineContent::Raw(Vec::new()),
+                    language: "rust",
+                    ident: 1,
+                    fence_type: FenceType::Tilda,
+                    fence_occ: 3,
+                })),
+            },
+            Case {
+                name: "language_with_few_spaces",
+                stack: Vec::new(),
+                input: " ~~~     rust",
+                expected: Some(Block::FencedCode(FencedCode {
+                    content: InlineContent::Raw(Vec::new()),
+                    language: "rust",
+                    ident: 1,
+                    fence_type: FenceType::Tilda,
+                    fence_occ: 3,
+                })),
+            },
+            Case {
+                name: "empty_language",
+                stack: Vec::new(),
+                input: " ~~~~      ",
+                expected: Some(Block::FencedCode(FencedCode {
+                    content: InlineContent::Raw(Vec::new()),
+                    language: "",
+                    ident: 1,
+                    fence_type: FenceType::Tilda,
+                    fence_occ: 4,
+                })),
+            },
+            Case {
+                name: "language_with_noize",
+                stack: Vec::new(),
+                input: " ~~~~ rust startline=3 $%@#$",
+                expected: Some(Block::FencedCode(FencedCode {
+                    content: InlineContent::Raw(Vec::new()),
+                    language: "rust",
+                    ident: 1,
+                    fence_type: FenceType::Tilda,
+                    fence_occ: 4,
+                })),
+            },
+        ];
 
-    //     let mut parser = Parser::new();
-    //     for test in tests {
-    //         parser.stack = test.stack;
-    //         let output = parser.try_open_fenced_code(test.input);
-    //         assert_eq!(output, test.expected, "case: {}", test.name);
-    //     }
-    // }
+        let mut parser = Parser::new();
+        for test in tests {
+            parser.stack = test.stack;
+            let output = parser.try_open_fenced_code(test.input);
+            assert_eq!(output, test.expected, "case: {}", test.name);
+        }
+    }
 }
