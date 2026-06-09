@@ -1,7 +1,7 @@
 pub mod errors;
-use crate::markdown::document;
 
 use super::block::*;
+use super::document;
 
 pub fn parse<'a>(input: &'a str) -> Result<document::Document<'a>, errors::ParserError> {
     let mut parser = Parser::new();
@@ -23,13 +23,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse(&mut self, input: &'a str) -> Result<document::Document<'a>, errors::ParserError> {
+    fn parse(&mut self, input: &'a str) -> Result<(), errors::ParserError> {
         for line in input.lines() {
             self.process_line(line);
         }
 
         self.close_from(0);
-        Ok(self.doc.clone())
+        Ok(())
     }
 
     fn process_line(&mut self, line: &'a str) {
@@ -68,12 +68,24 @@ impl<'a> Parser<'a> {
                 lines.push(continuation);
             }
 
+            if let Some(Block::Paragraph(_)) = self.stack.last() {
+                self.close_from(self.stack.len() - 1);
+            }
+
             return;
         }
+
+        self.close_from(close_from);
 
         // Remaning non-empty lines handling
         if let Some(b) = self.stack.last_mut() {
             match b {
+                Block::IndentedCode(ic) => {
+                    let InlineContent::Raw(lines) = &mut ic.content else {
+                        unreachable!("the content must be raw at this point");
+                    };
+                    lines.push(continuation);
+                }
                 Block::FencedCode(fc) => {
                     let InlineContent::Raw(lines) = &mut fc.content else {
                         unreachable!("the content must be raw at this point");
@@ -103,7 +115,12 @@ impl<'a> Parser<'a> {
             Block::ATXHeading(_) => None,
             Block::IndentedCode(_) => line.strip_prefix("    "),
             Block::FencedCode(_) => self.try_continue_fenced_code(block, line),
-            Block::Paragraph(_) => None,
+            Block::Paragraph(_) => match self.try_open(line) {
+                Some(Block::ATXHeading(_))
+                | Some(Block::FencedCode(_))
+                | Some(Block::ThematicBreak) => None,
+                _ => Some(line),
+            },
             Block::BlockQuote(_) => line.strip_prefix("> "),
         }
     }
@@ -165,7 +182,8 @@ impl<'a> Parser<'a> {
             return Some(b);
         }
 
-        self.try_open_paragraph(line)
+        // self.try_open_paragraph(line)
+        None
     }
 
     fn try_open_idented_code(&self, line: &'a str) -> Option<Block<'a>> {
@@ -176,10 +194,14 @@ impl<'a> Parser<'a> {
             return None;
         }
         if let Some(s) = line.strip_prefix("    ") {
-            return Some(Block::IndentedCode(InlineContent::Raw(vec![s])));
+            return Some(Block::IndentedCode(IndentedCode {
+                content: InlineContent::Raw(vec![s]),
+            }));
         }
         if let Some(s) = line.strip_prefix("\t") {
-            return Some(Block::IndentedCode(InlineContent::Raw(vec![s])));
+            return Some(Block::IndentedCode(IndentedCode {
+                content: InlineContent::Raw(vec![s]),
+            }));
         }
 
         None
@@ -326,17 +348,20 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn try_open_paragraph(&self, line: &'a str) -> Option<Block<'a>> {
-        if let Some(Block::FencedCode(_)) = self.stack.last() {
-            return None;
-        }
+    // fn try_open_paragraph(&self, line: &'a str) -> Option<Block<'a>> {
+    //     if let Some(Block::FencedCode(_)) = self.stack.last() {
+    //         return None;
+    //     }
+    //     if let Some(Block::IndentedCode(_)) = self.stack.last() {
+    //         return None;
+    //     }
 
-        if line.trim().is_empty() {
-            return None;
-        }
+    //     if line.trim().is_empty() {
+    //         return None;
+    //     }
 
-        return Some(Block::Paragraph(InlineContent::Raw(vec![line])));
-    }
+    //     return Some(Block::Paragraph(InlineContent::Raw(vec![line])));
+    // }
 
     /// Closes open blocks on the stack starting from particular index inclusively
     fn close_from(&mut self, idx: usize) {
@@ -345,13 +370,12 @@ impl<'a> Parser<'a> {
         }
 
         let num_iters = self.stack.len() - idx;
-        for _ in 0..=num_iters {
+        for _ in 0..num_iters {
             let last = self.stack.pop().unwrap();
 
             let Some(prev_to_last) = self.stack.last_mut() else {
                 // current last was the top most in the open blocks stack,
                 // since there is no previous to the last
-
                 self.doc.push(last);
                 return;
             };
@@ -400,41 +424,41 @@ mod tests {
                 name: "opens_after_non_paragraph_block",
                 stack: vec![Block::ThematicBreak],
                 input: "    let abc = 'some var'",
-                expected: Some(Block::IndentedCode(InlineContent::Raw(vec![
-                    "let abc = 'some var'",
-                ]))),
+                expected: Some(Block::IndentedCode(IndentedCode {
+                    content: InlineContent::Raw(vec!["let abc = 'some var'"]),
+                })),
             },
             Case {
                 name: "opens_at_with_four_space_prefix",
                 stack: Vec::new(),
                 input: "    let abc = 'some var'",
-                expected: Some(Block::IndentedCode(InlineContent::Raw(vec![
-                    "let abc = 'some var'",
-                ]))),
+                expected: Some(Block::IndentedCode(IndentedCode {
+                    content: InlineContent::Raw(vec!["let abc = 'some var'"]),
+                })),
             },
             Case {
                 name: "opens_at_with_tab_prefix",
                 stack: Vec::new(),
                 input: "\ta = np.array()",
-                expected: Some(Block::IndentedCode(InlineContent::Raw(vec![
-                    "a = np.array()",
-                ]))),
+                expected: Some(Block::IndentedCode(IndentedCode {
+                    content: InlineContent::Raw(vec!["a = np.array()"]),
+                })),
             },
             Case {
                 name: "leaves_spaces_after_four_space_prefix",
                 stack: Vec::new(),
                 input: "      a = np.array()",
-                expected: Some(Block::IndentedCode(InlineContent::Raw(vec![
-                    "  a = np.array()",
-                ]))),
+                expected: Some(Block::IndentedCode(IndentedCode {
+                    content: InlineContent::Raw(vec!["  a = np.array()"]),
+                })),
             },
             Case {
                 name: "leaves_spaces_after_tab",
                 stack: Vec::new(),
                 input: "\t  a = np.array()",
-                expected: Some(Block::IndentedCode(InlineContent::Raw(vec![
-                    "  a = np.array()",
-                ]))),
+                expected: Some(Block::IndentedCode(IndentedCode {
+                    content: InlineContent::Raw(vec!["  a = np.array()"]),
+                })),
             },
             Case {
                 name: "insufficient_spaces",

@@ -6,7 +6,7 @@ pub enum Block<'a> {
     ThematicBreak,
     ATXHeading(ATXHeading<'a>),
     // SetextHeading(&'a str, SetextHeadingLevel),
-    IndentedCode(InlineContent<'a>),
+    IndentedCode(IndentedCode<'a>),
     FencedCode(FencedCode<'a>),
     // HTML(&'a str),
     // LinkReference(LinkReference<'a>),
@@ -114,4 +114,9 @@ pub struct FencedCode<'a> {
     pub ident: usize,
     pub fence_type: FenceType,
     pub fence_occ: usize,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct IndentedCode<'a> {
+    pub content: InlineContent<'a>,
 }

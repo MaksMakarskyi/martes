@@ -23,6 +23,7 @@ impl Converter {
         input_file.read_to_string(&mut res).unwrap();
 
         let md_doc = markdown::parse(&res).unwrap();
+        println!("{:?}", md_doc);
         self.save_file(&md_doc.to_html())
     }
 

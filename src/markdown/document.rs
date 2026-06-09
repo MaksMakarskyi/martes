@@ -1,5 +1,7 @@
 use super::block;
-use crate::markdown::block::{ATXHeading, ATXHeadingLevel, Block, FencedCode, InlineContent};
+use crate::markdown::block::{
+    ATXHeading, ATXHeadingLevel, Block, FencedCode, IndentedCode, InlineContent,
+};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Document<'a> {
@@ -23,16 +25,10 @@ impl<'a> Document<'a> {
         for b in self.children.iter() {
             match b {
                 Block::ThematicBreak => html.push_str("<hr />\n"),
-                Block::ATXHeading(b) => {
-                    let s = self.atx_to_html(b);
-                    html.push_str(&s);
-                }
-                Block::IndentedCode(_) => html.push_str(""),
+                Block::ATXHeading(b) => html.push_str(&self.atx_to_html(b)),
+                Block::IndentedCode(ic) => html.push_str(&self.indented_code_to_html(ic)),
                 Block::FencedCode(fc) => html.push_str(&self.fenced_code_to_html(fc)),
-                Block::Paragraph(ic) => {
-                    let s = format!("<p>{}</p>\n", self.inline_content_to_html(ic));
-                    html.push_str(&s);
-                }
+                Block::Paragraph(ic) => html.push_str(&self.paragraph_to_html(ic)),
                 Block::BlockQuote(_) => html.push_str(""),
             }
         }
@@ -82,6 +78,36 @@ impl<'a> Document<'a> {
         };
 
         format!("<pre><code{language}>{content}</code></pre>\n")
+    }
+
+    fn indented_code_to_html(&self, indented_code: &IndentedCode) -> String {
+        let InlineContent::Raw(lines) = &indented_code.content else {
+            unreachable!("the block must be raw at this point");
+        };
+
+        format!(
+            "<pre><code>{}</code></pre>\n",
+            lines.iter().fold(String::new(), |mut acc, line| {
+                acc.push_str(line);
+                acc.push('\n');
+                acc
+            })
+        )
+    }
+
+    fn paragraph_to_html(&self, ic: &InlineContent) -> String {
+        let InlineContent::Raw(lines) = ic else {
+            unreachable!("the block must be raw at this point");
+        };
+
+        format!(
+            "<p>{}</p>\n",
+            lines
+                .iter()
+                .map(|l| l.trim())
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
     }
 }
 
