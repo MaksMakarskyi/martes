@@ -1,6 +1,6 @@
 use super::block;
 use crate::markdown::block::{
-    ATXHeading, ATXHeadingLevel, Block, FencedCode, IndentedCode, InlineContent,
+    ATXHeading, ATXHeadingLevel, Block, BlockQuote, FencedCode, IndentedCode, InlineContent,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -23,17 +23,21 @@ impl<'a> Document<'a> {
         let mut html = String::new();
 
         for b in self.children.iter() {
-            match b {
-                Block::ThematicBreak => html.push_str("<hr />\n"),
-                Block::ATXHeading(b) => html.push_str(&self.atx_to_html(b)),
-                Block::IndentedCode(ic) => html.push_str(&self.indented_code_to_html(ic)),
-                Block::FencedCode(fc) => html.push_str(&self.fenced_code_to_html(fc)),
-                Block::Paragraph(ic) => html.push_str(&self.paragraph_to_html(ic)),
-                Block::BlockQuote(_) => html.push_str(""),
-            }
+            html.push_str(&self.block_to_html(b));
         }
 
         html
+    }
+
+    fn block_to_html(&self, block: &Block) -> String {
+        match block {
+            Block::ThematicBreak => String::from("<hr />"),
+            Block::ATXHeading(b) => self.atx_to_html(b),
+            Block::IndentedCode(ic) => self.indented_code_to_html(ic),
+            Block::FencedCode(fc) => self.fenced_code_to_html(fc),
+            Block::Paragraph(ic) => self.paragraph_to_html(ic),
+            Block::BlockQuote(bq) => self.block_quote_html(bq),
+        }
     }
 
     fn atx_to_html(&self, b: &ATXHeading<'a>) -> String {
@@ -108,6 +112,15 @@ impl<'a> Document<'a> {
                 .collect::<Vec<_>>()
                 .join("\n")
         )
+    }
+
+    fn block_quote_html(&self, bq: &BlockQuote) -> String {
+        let mut res = String::new();
+        for child in bq.children.iter() {
+            res.push_str(&self.block_to_html(child));
+        }
+
+        format!("<blockquote>\n{res}</blockquote>\n")
     }
 }
 

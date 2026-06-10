@@ -1,8 +1,8 @@
-mod errors;
+pub mod errors;
 
 use super::config;
-use crate::markdown;
-pub use errors::ConverterError;
+use super::markdown::parser;
+use errors::ConverterError;
 use std::{
     fs::File,
     io::{Read, Write},
@@ -22,7 +22,7 @@ impl Converter {
         let mut res = String::new();
         input_file.read_to_string(&mut res).unwrap();
 
-        let md_doc = markdown::parse(&res).unwrap();
+        let md_doc = parser::parse(&res)?;
         println!("{:?}", md_doc);
         self.save_file(&md_doc.to_html())
     }

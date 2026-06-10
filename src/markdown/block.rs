@@ -58,7 +58,7 @@ impl TryFrom<u8> for ATXHeadingLevel {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct BlockQuote<'a> {
-    children: Vec<Block<'a>>,
+    pub children: Vec<Block<'a>>,
 }
 
 impl<'a> BlockQuote<'a> {
