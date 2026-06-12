@@ -36,7 +36,10 @@ impl<'a> Document<'a> {
             Block::IndentedCode(ic) => self.indented_code_to_html(ic),
             Block::FencedCode(fc) => self.fenced_code_to_html(fc),
             Block::Paragraph(ic) => self.paragraph_to_html(ic),
+            Block::LinkReference(_) => String::new(),
             Block::BlockQuote(bq) => self.block_quote_html(bq),
+            Block::List(_) => String::new(),
+            Block::ListItem(_) => String::new(),
         }
     }
 
@@ -108,7 +111,19 @@ impl<'a> Document<'a> {
             "<p>{}</p>\n",
             lines
                 .iter()
-                .map(|l| l.trim())
+                .map(|l| {
+                    let after_whitespaces_before = l.trim_start();
+                    let after_whitespaces = after_whitespaces_before.trim_end();
+
+                    let hard_line_break =
+                        if after_whitespaces_before.len() - after_whitespaces.len() > 2 {
+                            "<br />"
+                        } else {
+                            ""
+                        };
+
+                    return format!("{after_whitespaces}{hard_line_break}");
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         )

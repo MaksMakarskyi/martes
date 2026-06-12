@@ -12,6 +12,6 @@ pub enum ConverterError {
     FileAlreadyExist { path: &'static str },
 
     /// Used when parser failed internally
-    #[error("failed to parse input")]
+    #[error("failed to parse input: {0}")]
     Parse(#[from] errors::ParserError),
 }

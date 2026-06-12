@@ -1,10 +1,13 @@
 pub mod errors;
-
-use std::vec;
+mod openers;
 
 use super::block::*;
 use super::document;
+use openers::{OpenResult, try_open};
+// use super::inline::*;
 use errors::ParserError;
+use std::collections::HashMap;
+use std::vec;
 
 pub fn parse<'a>(input: &'a str) -> Result<document::Document<'a>, ParserError> {
     let mut parser = Parser::new();
@@ -14,28 +17,52 @@ pub fn parse<'a>(input: &'a str) -> Result<document::Document<'a>, ParserError> 
 }
 
 struct Parser<'a> {
-    doc: document::Document<'a>,
+    doc: Vec<Block<'a>>,
     stack: Vec<Block<'a>>,
+    links: HashMap<&'a str, LinkReference<'a>>,
 }
 
 impl<'a> Parser<'a> {
     fn new() -> Self {
         Parser {
-            doc: document::Document::new(),
+            doc: Vec::new(),
             stack: Vec::new(),
+            links: HashMap::new(),
         }
     }
 
     fn parse(&mut self, input: &'a str) -> Result<(), ParserError> {
         for line in input.lines() {
-            self.process_line(line)?;
+            self.parse_line(line)?;
         }
 
         self.close_from(0)?;
+
+        // let mut stack = Vec::new();
+        // for b in self.doc.iter_mut() {
+        //     stack.push(b);
+        // }
+
+        // while let Some(b) = stack.pop() {
+        //     match b {
+        //         Block::ThematicBreak => continue,
+        //         Block::LinkReference(_) => continue,
+        //         Block::ATXHeading(ah) => process_inline(&mut ah.content)?,
+        //         Block::Paragraph(ic) => process_inline(ic)?,
+        //         Block::IndentedCode(ic) => process_inline(&mut ic.content)?,
+        //         Block::FencedCode(fc) => process_inline(&mut fc.content)?,
+        //         Block::BlockQuote(bc) => {
+        //             for bc_b in bc.children.iter_mut() {
+        //                 stack.push(bc_b);
+        //             }
+        //         }
+        //     }
+        // }
+
         Ok(())
     }
 
-    fn process_line(&mut self, line: &'a str) -> Result<(), ParserError> {
+    fn parse_line(&mut self, line: &'a str) -> Result<(), ParserError> {
         let mut continuation = line;
         let mut close_from = 0;
         for block in self.stack.iter() {
@@ -53,25 +80,37 @@ impl<'a> Parser<'a> {
         }
 
         // New block opening
-        let last = if close_from > 0 {
+        let mut last = if close_from > 0 {
             Some(&self.stack[close_from - 1])
         } else {
             None
         };
 
-        // TODO: for container blocks: iterate like in the try_continue, and add new blocks to the stack,
-        // not just to the children attribute, since they are then treated as closed ones, which is
-        // incorrect
-        if let Some(new_block) = self.try_open(continuation, last) {
-            self.close_from(close_from)?;
-            self.stack.push(new_block);
-            return Ok(());
+        let mut opened_blocks = Vec::new();
+        loop {
+            match try_open(continuation, last) {
+                OpenResult::Continue(b, l) => {
+                    opened_blocks.push(b);
+                    continuation = l;
+                }
+                OpenResult::Opened(b) => {
+                    self.close_from(close_from)?;
+                    self.stack.append(&mut opened_blocks);
+                    self.stack.push(b);
+                    return Ok(());
+                }
+                OpenResult::NotOpened => break,
+            }
+            last = None;
         }
 
-        println!("{:?}", self.stack);
+        if !opened_blocks.is_empty() {
+            self.close_from(close_from)?;
+            self.stack.append(&mut opened_blocks);
+        }
 
         // Lazy continuation handling
-        if !line.trim().is_empty()
+        if !continuation.trim().is_empty()
             && let Some(Block::Paragraph(ic)) = self.stack.last_mut()
         {
             let InlineContent::Raw(lines) = ic else {
@@ -115,18 +154,22 @@ impl<'a> Parser<'a> {
 
     fn try_continue(&self, block: &Block, line: &'a str) -> ContinueResult<'a> {
         match block {
-            Block::ThematicBreak => ContinueResult::NotContinue,
-            Block::ATXHeading(_) => ContinueResult::NotContinue,
-            Block::IndentedCode(_) => match line.strip_prefix("    ") {
-                Some(s) => ContinueResult::Continue(s),
-                None => ContinueResult::NotContinue,
-            },
+            Block::ThematicBreak | Block::ATXHeading(_) | Block::Paragraph(_) => {
+                ContinueResult::NotContinue
+            }
+            Block::LinkReference(_) => unimplemented!(),
+            Block::List(_) => unimplemented!(),
+            Block::ListItem(_) => unimplemented!(),
+            Block::IndentedCode(_) => self.try_continue_indented_code(line),
             Block::FencedCode(fc) => self.try_continue_fenced_code(fc, line),
-            Block::Paragraph(_) => ContinueResult::NotContinue,
-            Block::BlockQuote(_) => match line.strip_prefix(">") {
-                Some(s) => ContinueResult::Continue(s),
-                None => ContinueResult::NotContinue,
-            },
+            Block::BlockQuote(_) => self.try_continue_blockquote(line),
+        }
+    }
+
+    fn try_continue_indented_code(&self, line: &'a str) -> ContinueResult<'a> {
+        match line.strip_prefix("    ") {
+            Some(s) => ContinueResult::Continue(s),
+            None => ContinueResult::NotContinue,
         }
     }
 
@@ -166,217 +209,14 @@ impl<'a> Parser<'a> {
         ContinueResult::Continue(line)
     }
 
-    fn try_open(&self, line: &'a str, last: Option<&Block<'a>>) -> Option<Block<'a>> {
-        if let Some(b) = self.try_open_idented_code(line, last) {
-            return Some(b);
+    fn try_continue_blockquote(&self, line: &'a str) -> ContinueResult<'a> {
+        match line.strip_prefix(">") {
+            Some(after_marker) => match after_marker.strip_prefix(" ") {
+                Some(after_space) => ContinueResult::Continue(after_space),
+                None => ContinueResult::Continue(after_marker),
+            },
+            None => ContinueResult::NotContinue,
         }
-
-        // TODO: check for the Setext Heading
-
-        if let Some(b) = self.try_open_thematic_break(line) {
-            return Some(b);
-        }
-        if let Some(b) = self.try_open_atx_heading(line) {
-            return Some(b);
-        }
-        if let Some(b) = self.try_open_fenced_code(line, last) {
-            return Some(b);
-        }
-        if let Some(b) = self.try_open_block_quote(line) {
-            return Some(b);
-        }
-
-        // self.try_open_paragraph(line)
-        None
-    }
-
-    fn try_open_idented_code(&self, line: &'a str, last: Option<&Block<'a>>) -> Option<Block<'a>> {
-        if let Some(Block::Paragraph(_)) = last {
-            return None;
-        }
-        if let Some(Block::FencedCode(_)) = last {
-            return None;
-        }
-        if let Some(s) = line.strip_prefix("    ") {
-            return Some(Block::IndentedCode(IndentedCode {
-                content: InlineContent::Raw(vec![s]),
-            }));
-        }
-        if let Some(s) = line.strip_prefix("\t") {
-            return Some(Block::IndentedCode(IndentedCode {
-                content: InlineContent::Raw(vec![s]),
-            }));
-        }
-
-        None
-    }
-
-    fn try_open_thematic_break(&self, line: &'a str) -> Option<Block<'a>> {
-        let after_space_indent = line.trim_start_matches(' ');
-        if line.len() - after_space_indent.len() > 3 {
-            return None;
-        }
-
-        let after_indent = after_space_indent.trim_start_matches('\t');
-        if after_space_indent.len() > after_indent.len() {
-            return None;
-        }
-
-        let mut thematic_ch = None;
-        let mut occ = 0;
-        for ch in after_indent.chars() {
-            match ch {
-                '-' | '_' | '*' => {
-                    if let Some(thematic_ch) = thematic_ch {
-                        if thematic_ch != ch {
-                            return None;
-                        } else {
-                            occ += 1;
-                        }
-                    } else {
-                        thematic_ch = Some(ch);
-                        occ += 1;
-                    }
-                }
-                '\t' | ' ' => continue,
-                _ => return None,
-            }
-        }
-
-        if occ < 3 {
-            return None;
-        }
-
-        Some(Block::ThematicBreak)
-    }
-
-    fn try_open_atx_heading(&self, line: &'a str) -> Option<Block<'a>> {
-        let after_indent = line.trim_start_matches(' ');
-        if line.len() - after_indent.len() > 3 {
-            return None;
-        }
-
-        let after_markers = after_indent.trim_start_matches('#');
-        let level = after_indent.len() - after_markers.len();
-        if level <= 0 || level > 6 {
-            return None;
-        }
-
-        let Ok(level) = ATXHeadingLevel::try_from(level as u8) else {
-            return None;
-        };
-
-        let after_whitespaces_before = after_markers.trim_start();
-        if after_markers.len() == after_whitespaces_before.len() {
-            if after_whitespaces_before.len() == 0 {
-                return Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec![""]),
-                    level,
-                }));
-            }
-
-            return None;
-        }
-
-        let after_whitespaces = after_whitespaces_before.trim_end();
-        let after_closing_seq = after_whitespaces.trim_end_matches('#');
-        if after_closing_seq.len() == after_whitespaces.len() {
-            return Some(Block::ATXHeading(ATXHeading {
-                content: InlineContent::Raw(vec![after_closing_seq]),
-                level,
-            }));
-        }
-
-        let after_whitespaces_after = after_closing_seq.trim_end();
-        if after_whitespaces_after.len() == after_closing_seq.len() {
-            return Some(Block::ATXHeading(ATXHeading {
-                content: InlineContent::Raw(vec![after_whitespaces]),
-                level,
-            }));
-        }
-
-        Some(Block::ATXHeading(ATXHeading {
-            content: InlineContent::Raw(vec![after_whitespaces_after]),
-            level,
-        }))
-    }
-
-    fn try_open_fenced_code(&self, line: &'a str, last: Option<&Block<'a>>) -> Option<Block<'a>> {
-        let after_indent = line.trim_start_matches(' ');
-        let indent_size = line.len() - after_indent.len();
-        if indent_size > 3 {
-            return None;
-        }
-
-        let after_tabs = after_indent.trim_start_matches('\t');
-        if after_tabs.len() < after_indent.len() {
-            return None;
-        }
-
-        let fence_type: FenceType;
-        let fence_occ: usize;
-        let mut after_fence = after_tabs.trim_start_matches('~');
-        if after_fence.len() == after_tabs.len() {
-            after_fence = after_tabs.trim_start_matches('`');
-            if after_fence.len() == after_tabs.len() {
-                return None;
-            }
-
-            fence_type = FenceType::Backtick;
-        } else {
-            fence_type = FenceType::Tilda;
-        }
-
-        fence_occ = after_tabs.len() - after_fence.len();
-        if fence_occ <= 2 {
-            return None;
-        }
-
-        if let Some(Block::FencedCode(fc)) = last {
-            if fc.fence_occ > fence_occ || fc.fence_type != fence_type {
-                return None;
-            }
-        }
-
-        let language = after_fence.trim_start().split(' ').next().unwrap_or("");
-
-        Some(Block::FencedCode(FencedCode {
-            content: InlineContent::Raw(Vec::new()),
-            language: language,
-            ident: indent_size,
-            fence_type: fence_type,
-            fence_occ: fence_occ,
-        }))
-    }
-
-    fn try_open_block_quote(&self, line: &'a str) -> Option<Block<'a>> {
-        let after_indent = line.trim_start_matches(' ');
-        let indent_size = line.len() - after_indent.len();
-        if indent_size > 3 {
-            return None;
-        }
-
-        let after_tabs = after_indent.trim_start_matches('\t');
-        if after_tabs.len() < after_indent.len() {
-            return None;
-        }
-
-        let after_marker = after_tabs.strip_prefix('>')?;
-        let after_whitespaces_before = after_marker.trim_start();
-
-        let mut children = Vec::new();
-        match self.try_open(after_whitespaces_before, None) {
-            Some(block) => children.push(block),
-            None => {
-                if !after_whitespaces_before.trim().is_empty() {
-                    children.push(Block::Paragraph(InlineContent::Raw(vec![
-                        after_whitespaces_before,
-                    ])))
-                }
-            }
-        }
-
-        Some(Block::BlockQuote(BlockQuote { children: children }))
     }
 
     /// Closes open blocks on the stack starting from particular index inclusively
@@ -388,6 +228,11 @@ impl<'a> Parser<'a> {
         let num_iters = self.stack.len() - idx;
         for _ in 0..num_iters {
             let last = self.stack.pop().unwrap();
+
+            if let Block::LinkReference(lr) = last {
+                self.links.insert(lr.label, lr);
+                continue;
+            }
 
             let Some(prev_to_last) = self.stack.last_mut() else {
                 // current last was the top most in the open blocks stack,
@@ -418,498 +263,92 @@ impl<'a> Into<document::Document<'a>> for Parser<'a> {
     }
 }
 
+#[derive(PartialEq, Debug, Clone)]
 enum ContinueResult<'a> {
     Continue(&'a str),
     NotContinue,
     Close,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// fn process_inline(ic: &mut InlineContent) -> Result<(), ParserError> {
+//     let InlineContent::Raw(lines) = ic else {
+//         return Err(ParserError::ExpectedRawContent);
+//     };
 
-    struct Case<'a> {
-        name: &'static str,
-        input: &'static str,
-        expected: Option<Block<'a>>,
-    }
+//     let mut parsed: Vec<Inline> = Vec::new();
 
-    #[test]
-    fn test_try_open_indented_code() {
-        let tests = vec![
-            Case {
-                name: "opens_at_with_four_space_prefix",
-                input: "    let abc = 'some var'",
-                expected: Some(Block::IndentedCode(IndentedCode {
-                    content: InlineContent::Raw(vec!["let abc = 'some var'"]),
-                })),
-            },
-            Case {
-                name: "opens_at_with_tab_prefix",
-                input: "\ta = np.array()",
-                expected: Some(Block::IndentedCode(IndentedCode {
-                    content: InlineContent::Raw(vec!["a = np.array()"]),
-                })),
-            },
-            Case {
-                name: "leaves_spaces_after_four_space_prefix",
-                input: "      a = np.array()",
-                expected: Some(Block::IndentedCode(IndentedCode {
-                    content: InlineContent::Raw(vec!["  a = np.array()"]),
-                })),
-            },
-            Case {
-                name: "leaves_spaces_after_tab",
-                input: "\t  a = np.array()",
-                expected: Some(Block::IndentedCode(IndentedCode {
-                    content: InlineContent::Raw(vec!["  a = np.array()"]),
-                })),
-            },
-            Case {
-                name: "insufficient_spaces",
-                input: "   fff",
-                expected: None,
-            },
-            Case {
-                name: "no_spaces",
-                input: "dfsf",
-                expected: None,
-            },
-        ];
+//     let raw = lines.join("\n").into_bytes();
+//     let mut idx = 0;
+//     while idx < raw.len() {
+//         match raw[idx] {
+//             b'`' => match process_code_span(&mut raw[idx..]) {
+//                 ProcessResult::Inline(cs, shift) => {
+//                     idx += shift;
+//                     parsed.push(cs);
+//                 }
+//                 ProcessResult::None => {
+//                     while raw[idx] == b'`' {
+//                         idx += 1
+//                     }
+//                 }
+//             },
+//             _ => idx += 1,
+//         }
+//     }
 
-        let parser = Parser::new();
-        for test in tests {
-            let output = parser.try_open_idented_code(test.input, None);
-            assert_eq!(output, test.expected, "case: {}", test.name);
-        }
-    }
+//     Ok(())
+// }
 
-    #[test]
-    fn test_try_open_thematic_break() {
-        let tests = vec![
-            Case {
-                name: "few_markers",
-                input: "--",
-                expected: None,
-            },
-            Case {
-                name: "several_marker_types",
-                input: "-*-",
-                expected: None,
-            },
-            Case {
-                name: "invalid_marker",
-                input: "+++",
-                expected: None,
-            },
-            Case {
-                name: "does_not_interrupt_indented_code",
-                input: "    ---",
-                expected: None,
-            },
-            Case {
-                name: "does_not_interrupt_tab_prefixed_indented_code",
-                input: "\t---",
-                expected: None,
-            },
-            Case {
-                name: "tab_and_spaces_ident",
-                input: " \t---",
-                expected: None,
-            },
-            Case {
-                name: "invalid_characters_after",
-                input: "--- ds",
-                expected: None,
-            },
-            Case {
-                name: "invalid_characters_before",
-                input: "ewr---",
-                expected: None,
-            },
-            Case {
-                name: "invalid_characters_in_between",
-                input: "-f-f-",
-                expected: None,
-            },
-            Case {
-                name: "hyphen_markers",
-                input: "---",
-                expected: Some(Block::ThematicBreak),
-            },
-            Case {
-                name: "asterisk_markers",
-                input: "***",
-                expected: Some(Block::ThematicBreak),
-            },
-            Case {
-                name: "underline_markers",
-                input: "___",
-                expected: Some(Block::ThematicBreak),
-            },
-            Case {
-                name: "more_than_three_marker_occurrences",
-                input: "_____________________________________",
-                expected: Some(Block::ThematicBreak),
-            },
-            Case {
-                name: "spaces_and_tabs_in_between",
-                input: " **  * **\t* ** * **\t   ",
-                expected: Some(Block::ThematicBreak),
-            },
-        ];
+// fn process_code_span<'a>(content: &'a mut [u8]) -> ProcessResult<'a> {
+//     let mut idx = 0;
+//     let mut num_markers = 0;
 
-        let parser = Parser::new();
-        for test in tests {
-            let output = parser.try_open_thematic_break(test.input);
-            assert_eq!(output, test.expected, "case: {}", test.name);
-        }
-    }
+//     while content[idx] == b'`' {
+//         idx += 1
+//     }
+//     num_markers = idx;
 
-    #[test]
-    fn test_try_open_atx_heading() {
-        let tests = vec![
-            Case {
-                name: "escape_marker_before",
-                input: "\\### foo",
-                expected: None,
-            },
-            Case {
-                name: "escape_marker_inside",
-                input: "##\\# foo",
-                expected: None,
-            },
-            Case {
-                name: "too_many_markers",
-                input: "######### foo",
-                expected: None,
-            },
-            Case {
-                name: "too_many_spaces_before_markers",
-                input: "    # foo",
-                expected: None,
-            },
-            Case {
-                name: "tab_before_markers",
-                input: "\t# foo",
-                expected: None,
-            },
-            Case {
-                name: "spaces_and_tab_before_markers",
-                input: "  \t# foo",
-                expected: None,
-            },
-            Case {
-                name: "h1_heading",
-                input: "# foo",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H1,
-                })),
-            },
-            Case {
-                name: "h2_heading",
-                input: "## foo",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H2,
-                })),
-            },
-            Case {
-                name: "h3_heading",
-                input: "### foo",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H3,
-                })),
-            },
-            Case {
-                name: "h4_heading",
-                input: "#### foo",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H4,
-                })),
-            },
-            Case {
-                name: "h5_heading",
-                input: "##### foo",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H5,
-                })),
-            },
-            Case {
-                name: "h6_heading",
-                input: "###### foo",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H6,
-                })),
-            },
-            Case {
-                name: "empty_content",
-                input: "#",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec![""]),
-                    level: ATXHeadingLevel::H1,
-                })),
-            },
-            Case {
-                name: "space_content",
-                input: "## ",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec![""]),
-                    level: ATXHeadingLevel::H2,
-                })),
-            },
-            Case {
-                name: "tab_content",
-                input: "###\t",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec![""]),
-                    level: ATXHeadingLevel::H3,
-                })),
-            },
-            Case {
-                name: "spaces_around",
-                input: "######                  foo                     ",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H6,
-                })),
-            },
-            Case {
-                name: "closing_sequence",
-                input: "## foo ##",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H2,
-                })),
-            },
-            Case {
-                name: "not_a_closing_sequence",
-                input: "## foo ## b",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo ## b"]),
-                    level: ATXHeadingLevel::H2,
-                })),
-            },
-            Case {
-                name: "escaped_closing_sequence_inside",
-                input: "## foo #\\##",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo #\\##"]),
-                    level: ATXHeadingLevel::H2,
-                })),
-            },
-            Case {
-                name: "escaped_closing_sequence_before",
-                input: "## foo \\###",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo \\###"]),
-                    level: ATXHeadingLevel::H2,
-                })),
-            },
-            Case {
-                name: "longer_closing_sequence",
-                input: "# foo ##################################",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H1,
-                })),
-            },
-            Case {
-                name: "shorter_closing_sequence",
-                input: "##### foo ##",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H5,
-                })),
-            },
-            Case {
-                name: "spaces_after_closing_sequence",
-                input: "### foo ###     ",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H3,
-                })),
-            },
-            Case {
-                name: "tabs_after_closing_sequence",
-                input: "### foo ###     ",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H3,
-                })),
-            },
-            Case {
-                name: "closing_sequence_without_a_space",
-                input: "### foo#",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo#"]),
-                    level: ATXHeadingLevel::H3,
-                })),
-            },
-            Case {
-                name: "closing_sequence_after_tab",
-                input: "### foo\t#",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H3,
-                })),
-            },
-            Case {
-                name: "three_spaces_before_markers",
-                input: "   # foo",
-                expected: Some(Block::ATXHeading(ATXHeading {
-                    content: InlineContent::Raw(vec!["foo"]),
-                    level: ATXHeadingLevel::H1,
-                })),
-            },
-        ];
+//     let mut num_current = 0;
+//     while idx < content.len() {
+//         match content[idx] {
+//             b'`' => {
+//                 num_current += 1;
+//                 if idx == content.len() - 1 || content[idx + 1] != b'`' {
+//                     break;
+//                 }
+//             }
+//             _ => {
+//                 num_current = 0;
+//             }
+//         }
+//     }
 
-        let parser = Parser::new();
-        for test in tests {
-            let output = parser.try_open_atx_heading(test.input);
-            assert_eq!(output, test.expected, "case: {}", test.name);
-        }
-    }
+//     if num_current != num_markers {
+//         return ProcessResult::None;
+//     }
 
-    #[test]
-    fn test_try_open_fenced_code() {
-        let tests = vec![
-            Case {
-                name: "too_many_spaces_before_markers",
-                input: "    ~~~",
-                expected: None,
-            },
-            Case {
-                name: "tab_before_markers",
-                input: "\t```",
-                expected: None,
-            },
-            Case {
-                name: "tab_and_spaces_before_markers",
-                input: " \t ~~~",
-                expected: None,
-            },
-            Case {
-                name: "too_few_markers",
-                input: "``",
-                expected: None,
-            },
-            Case {
-                name: "tildes",
-                input: "~~~",
-                expected: Some(Block::FencedCode(FencedCode {
-                    content: InlineContent::Raw(Vec::new()),
-                    language: "",
-                    ident: 0,
-                    fence_type: FenceType::Tilda,
-                    fence_occ: 3,
-                })),
-            },
-            Case {
-                name: "Backticks",
-                input: "```",
-                expected: Some(Block::FencedCode(FencedCode {
-                    content: InlineContent::Raw(Vec::new()),
-                    language: "",
-                    ident: 0,
-                    fence_type: FenceType::Backtick,
-                    fence_occ: 3,
-                })),
-            },
-            Case {
-                name: "spaces_before_markers",
-                input: "   ```",
-                expected: Some(Block::FencedCode(FencedCode {
-                    content: InlineContent::Raw(Vec::new()),
-                    language: "",
-                    ident: 3,
-                    fence_type: FenceType::Backtick,
-                    fence_occ: 3,
-                })),
-            },
-            Case {
-                name: "language",
-                input: " ~~~python",
-                expected: Some(Block::FencedCode(FencedCode {
-                    content: InlineContent::Raw(Vec::new()),
-                    language: "python",
-                    ident: 1,
-                    fence_type: FenceType::Tilda,
-                    fence_occ: 3,
-                })),
-            },
-            Case {
-                name: "language_with_space",
-                input: " ~~~ rust",
-                expected: Some(Block::FencedCode(FencedCode {
-                    content: InlineContent::Raw(Vec::new()),
-                    language: "rust",
-                    ident: 1,
-                    fence_type: FenceType::Tilda,
-                    fence_occ: 3,
-                })),
-            },
-            Case {
-                name: "language_with_few_spaces",
-                input: " ~~~     rust",
-                expected: Some(Block::FencedCode(FencedCode {
-                    content: InlineContent::Raw(Vec::new()),
-                    language: "rust",
-                    ident: 1,
-                    fence_type: FenceType::Tilda,
-                    fence_occ: 3,
-                })),
-            },
-            Case {
-                name: "empty_language",
-                input: " ~~~~      ",
-                expected: Some(Block::FencedCode(FencedCode {
-                    content: InlineContent::Raw(Vec::new()),
-                    language: "",
-                    ident: 1,
-                    fence_type: FenceType::Tilda,
-                    fence_occ: 4,
-                })),
-            },
-            Case {
-                name: "language_with_noize",
-                input: " ~~~~ rust startline=3 $%@#$",
-                expected: Some(Block::FencedCode(FencedCode {
-                    content: InlineContent::Raw(Vec::new()),
-                    language: "rust",
-                    ident: 1,
-                    fence_type: FenceType::Tilda,
-                    fence_occ: 4,
-                })),
-            },
-        ];
+//     for b in content.iter_mut() {
+//         if *b == b'\n' {
+//             *b = b' ';
+//         }
+//     }
 
-        let parser = Parser::new();
-        for test in tests {
-            let output = parser.try_open_fenced_code(test.input, None);
-            assert_eq!(output, test.expected, "case: {}", test.name);
-        }
-    }
+//     if &content[0 + num_markers] == &b' ' && &content[idx - num_markers] == &b' ' {
+//         return ProcessResult::Inline(
+//             Inline::CodeSpan(
+//                 str::from_utf8(&content[0 + num_markers + 1..idx - num_markers - 1]).unwrap(),
+//             ),
+//             idx + 1,
+//         );
+//     } else {
+//         return ProcessResult::Inline(
+//             Inline::CodeSpan(str::from_utf8(&content[0 + num_markers..idx - num_markers]).unwrap()),
+//             idx + 1,
+//         );
+//     }
+// }
 
-    #[test]
-    fn test_try_open_block_quote() {
-        let tests = vec![Case {
-            name: "simple_quote",
-            input: "> some text",
-            expected: Some(Block::BlockQuote(BlockQuote {
-                children: vec![Block::Paragraph(InlineContent::Raw(vec!["some text"]))],
-            })),
-        }];
-
-        let parser = Parser::new();
-        for test in tests {
-            let output = parser.try_open_block_quote(test.input);
-            assert_eq!(output, test.expected, "case: {}", test.name);
-        }
-    }
-}
+// enum ProcessResult<'a> {
+//     Inline(Inline<'a>, usize),
+//     None,
+// }

@@ -9,13 +9,13 @@ pub enum Block<'a> {
     IndentedCode(IndentedCode<'a>),
     FencedCode(FencedCode<'a>),
     // HTML(&'a str),
-    // LinkReference(LinkReference<'a>),
+    LinkReference(LinkReference<'a>),
     Paragraph(InlineContent<'a>),
 
     // Container Blocks
     BlockQuote(BlockQuote<'a>),
-    // ListItem(ListItem<'a>),
-    // List(List<'a>),
+    ListItem(ListItem<'a>),
+    List(List<'a>),
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -73,33 +73,34 @@ impl<'a> BlockQuote<'a> {
 //     H2,
 // }
 
-// #[derive(PartialEq, Debug)]
-// pub enum ListType {
-//     OrderedDot(u32),
-//     OrdererParentheses(u32),
-//     UnorderedMinus,
-//     UnorderedPlus,
-//     UnorderedAsterisk,
-// }
+#[derive(PartialEq, Debug, Clone)]
+pub enum ListType {
+    OrderedDot(u32),
+    OrdererParentheses(u32),
+    UnorderedMinus,
+    UnorderedPlus,
+    UnorderedAsterisk,
+}
 
-// #[derive(PartialEq, Debug)]
-// pub struct List<'a> {
-//     items: Vec<ListItem<'a>>,
-//     list_type: ListType,
-//     tight: bool,
-// }
+#[derive(PartialEq, Debug, Clone)]
+pub struct List<'a> {
+    pub items: Vec<ListItem<'a>>,
+    pub list_type: ListType,
+    pub tight: bool,
+}
 
-// #[derive(PartialEq, Debug)]
-// pub struct LinkReference<'a> {
-//     url: &'a str,
-//     title: &'a str,
-//     text: &'a str,
-// }
+#[derive(PartialEq, Debug, Clone)]
+pub struct ListItem<'a> {
+    pub children: Vec<Block<'a>>,
+    pub padding: usize,
+}
 
-// #[derive(PartialEq, Debug)]
-// pub struct ListItem<'a> {
-//     children: Vec<Block<'a>>,
-// }
+#[derive(PartialEq, Debug, Clone)]
+pub struct LinkReference<'a> {
+    pub label: &'a str,
+    pub destination: &'a str,
+    pub title: Option<&'a str>,
+}
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum FenceType {
