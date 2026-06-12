@@ -317,6 +317,7 @@ fn try_open_list<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResult<'a> 
                 continuation = &line[ident_idx + idx + 1..];
                 break;
             }
+            '\t' => unimplemented!("Add handle tabs after markers"),
             _ => return OpenResult::NotOpened,
         }
     }
@@ -1045,6 +1046,18 @@ mod tests {
             },
             Case {
                 name: "tabs_after_markers",
+                input: "-\tsome text",
+                expected: OpenResult::Continue(
+                    Block::List(List {
+                        items: Vec::new(),
+                        list_type: ListType::UnorderedMinus,
+                        tight: true,
+                    }),
+                    "   some text",
+                ),
+            },
+            Case {
+                name: "tabs_after_space",
                 input: "- \t\tsome text",
                 expected: OpenResult::Continue(
                     Block::List(List {
