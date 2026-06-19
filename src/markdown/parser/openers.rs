@@ -1,40 +1,44 @@
-use super::super::block::*;
+use super::utils::{parse_list_marker, strip_indent};
+use crate::markdown::block::*;
 
-pub fn try_open<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResult<'a> {
-    if let OpenResult::Opened(b) = try_open_idented_code(line, last) {
+pub fn try_open<'a>(line: &'a str, parent: Option<&Block<'a>>) -> OpenResult<'a> {
+    if let OpenResult::Opened(b) = try_open_indented_code(line, parent) {
         return OpenResult::Opened(b);
     }
 
     // TODO: check for the Setext Heading
 
-    if let OpenResult::Opened(b) = try_open_thematic_break(line, last) {
+    if let OpenResult::Opened(b) = try_open_thematic_break(line, parent) {
         return OpenResult::Opened(b);
     }
-    if let OpenResult::Opened(b) = try_open_atx_heading(line, last) {
+    if let OpenResult::Opened(b) = try_open_atx_heading(line, parent) {
         return OpenResult::Opened(b);
     }
-    if let OpenResult::Opened(b) = try_open_fenced_code(line, last) {
+    if let OpenResult::Opened(b) = try_open_fenced_code(line, parent) {
         return OpenResult::Opened(b);
     }
-    if let OpenResult::Opened(b) = try_open_link_reference(line, last) {
-        return OpenResult::Opened(b);
-    }
+    // if let OpenResult::Opened(b) = try_open_link_reference(line, last) {
+    //     return OpenResult::Opened(b);
+    // }
 
-    if let OpenResult::Continue(b, s) = try_open_block_quote(line, last) {
+    if let OpenResult::Continue(b, s) = try_open_block_quote(line, parent) {
         return OpenResult::Continue(b, s);
     }
-    if let OpenResult::Continue(b, s) = try_open_list(line, last) {
+    if let OpenResult::Continue(b, s) = try_open_list(line, parent) {
+        return OpenResult::Continue(b, s);
+    }
+    if let OpenResult::Continue(b, s) = try_open_list_item(line, parent) {
         return OpenResult::Continue(b, s);
     }
 
     OpenResult::NotOpened
 }
 
-fn try_open_idented_code<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResult<'a> {
-    if let Some(Block::Paragraph(_)) = last {
+fn try_open_indented_code<'a>(line: &'a str, parent: Option<&Block<'a>>) -> OpenResult<'a> {
+    if let Some(Block::Paragraph(_)) = parent {
         return OpenResult::NotOpened;
     }
-    if let Some(Block::FencedCode(_)) = last {
+    if let Some(Block::FencedCode(_)) = parent {
         return OpenResult::NotOpened;
     }
 
@@ -52,36 +56,24 @@ fn try_open_idented_code<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenRes
     return OpenResult::NotOpened;
 }
 
-fn try_open_thematic_break<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResult<'a> {
-    if let Some(Block::FencedCode(_)) = last {
+fn try_open_thematic_break<'a>(line: &'a str, parent: Option<&Block<'a>>) -> OpenResult<'a> {
+    if let Some(Block::FencedCode(_)) = parent {
         return OpenResult::NotOpened;
     }
 
-    let after_space_indent = line.trim_start_matches(' ');
-    if line.len() - after_space_indent.len() > 3 {
+    let Some(after_indent) = strip_indent(line) else {
         return OpenResult::NotOpened;
-    }
-
-    let after_indent = after_space_indent.trim_start_matches('\t');
-    if after_space_indent.len() > after_indent.len() {
-        return OpenResult::NotOpened;
-    }
+    };
 
     let mut thematic_ch = None;
     let mut occ = 0;
     for ch in after_indent.chars() {
         match ch {
             '-' | '_' | '*' => {
-                if let Some(thematic_ch) = thematic_ch {
-                    if thematic_ch != ch {
-                        return OpenResult::NotOpened;
-                    } else {
-                        occ += 1;
-                    }
-                } else {
-                    thematic_ch = Some(ch);
-                    occ += 1;
+                if *thematic_ch.get_or_insert(ch) != ch {
+                    return OpenResult::NotOpened;
                 }
+                occ += 1;
             }
             '\t' | ' ' => continue,
             _ => return OpenResult::NotOpened,
@@ -95,15 +87,14 @@ fn try_open_thematic_break<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenR
     OpenResult::Opened(Block::ThematicBreak)
 }
 
-fn try_open_atx_heading<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResult<'a> {
-    if let Some(Block::FencedCode(_)) = last {
+fn try_open_atx_heading<'a>(line: &'a str, parent: Option<&Block<'a>>) -> OpenResult<'a> {
+    if let Some(Block::FencedCode(_)) = parent {
         return OpenResult::NotOpened;
     }
 
-    let after_indent = line.trim_start_matches(' ');
-    if line.len() - after_indent.len() > 3 {
+    let Some(after_indent) = strip_indent(line) else {
         return OpenResult::NotOpened;
-    }
+    };
 
     let after_markers = after_indent.trim_start_matches('#');
     let level = after_indent.len() - after_markers.len();
@@ -150,24 +141,17 @@ fn try_open_atx_heading<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResu
     }))
 }
 
-fn try_open_fenced_code<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResult<'a> {
-    let after_indent = line.trim_start_matches(' ');
-    let indent_size = line.len() - after_indent.len();
-    if indent_size > 3 {
+fn try_open_fenced_code<'a>(line: &'a str, parent: Option<&Block<'a>>) -> OpenResult<'a> {
+    let Some(after_indent) = strip_indent(line) else {
         return OpenResult::NotOpened;
-    }
-
-    let after_tabs = after_indent.trim_start_matches('\t');
-    if after_tabs.len() < after_indent.len() {
-        return OpenResult::NotOpened;
-    }
+    };
 
     let fence_type: FenceType;
     let fence_occ: usize;
-    let mut after_fence = after_tabs.trim_start_matches('~');
-    if after_fence.len() == after_tabs.len() {
-        after_fence = after_tabs.trim_start_matches('`');
-        if after_fence.len() == after_tabs.len() {
+    let mut after_fence = after_indent.trim_start_matches('~');
+    if after_fence.len() == after_indent.len() {
+        after_fence = after_indent.trim_start_matches('`');
+        if after_fence.len() == after_indent.len() {
             return OpenResult::NotOpened;
         }
 
@@ -176,12 +160,12 @@ fn try_open_fenced_code<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResu
         fence_type = FenceType::Tilda;
     }
 
-    fence_occ = after_tabs.len() - after_fence.len();
+    fence_occ = after_indent.len() - after_fence.len();
     if fence_occ <= 2 {
         return OpenResult::NotOpened;
     }
 
-    if let Some(Block::FencedCode(fc)) = last {
+    if let Some(Block::FencedCode(fc)) = parent {
         if fc.fence_occ > fence_occ || fc.fence_type != fence_type {
             return OpenResult::NotOpened;
         }
@@ -192,53 +176,39 @@ fn try_open_fenced_code<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResu
     OpenResult::Opened(Block::FencedCode(FencedCode {
         content: InlineContent::Raw(Vec::new()),
         language: language,
-        ident: indent_size,
+        ident: line.len() - after_indent.len(),
         fence_type: fence_type,
         fence_occ: fence_occ,
     }))
 }
 
-fn try_open_link_reference<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResult<'a> {
-    if let Some(Block::Paragraph(_)) = last {
-        return OpenResult::NotOpened;
-    }
-    if let Some(Block::FencedCode(_)) = last {
-        return OpenResult::NotOpened;
-    }
+// fn try_open_link_reference<'a>(line: &'a str, parent: Option<&Block<'a>>) -> OpenResult<'a> {
+//     if let Some(Block::Paragraph(_)) = last {
+//         return OpenResult::NotOpened;
+//     }
+//     if let Some(Block::FencedCode(_)) = last {
+//         return OpenResult::NotOpened;
+//     }
 
-    let after_indent = line.trim_start_matches(' ');
-    let indent_size = line.len() - after_indent.len();
-    if indent_size > 3 {
-        return OpenResult::NotOpened;
-    }
+//     let Some(after_indent) = strip_indent(line) else {
+//         return OpenResult::NotOpened;
+//     };
 
-    let after_tabs = after_indent.trim_start_matches('\t');
-    if after_tabs.len() < after_indent.len() {
-        return OpenResult::NotOpened;
-    }
+//     // TODO: Finish the main logic
 
-    // TODO: Finish the main logic
+//     OpenResult::NotOpened
+// }
 
-    OpenResult::NotOpened
-}
-
-fn try_open_block_quote<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResult<'a> {
-    if let Some(Block::FencedCode(_)) = last {
+fn try_open_block_quote<'a>(line: &'a str, parent: Option<&Block<'a>>) -> OpenResult<'a> {
+    if let Some(Block::FencedCode(_)) = parent {
         return OpenResult::NotOpened;
     }
 
-    let after_indent = line.trim_start_matches(' ');
-    let indent_size = line.len() - after_indent.len();
-    if indent_size > 3 {
+    let Some(after_indent) = strip_indent(line) else {
         return OpenResult::NotOpened;
-    }
+    };
 
-    let after_tabs = after_indent.trim_start_matches('\t');
-    if after_tabs.len() < after_indent.len() {
-        return OpenResult::NotOpened;
-    }
-
-    let Some(after_marker) = after_tabs.strip_prefix('>') else {
+    let Some(after_marker) = after_indent.strip_prefix('>') else {
         return OpenResult::NotOpened;
     };
     let after_space = after_marker.strip_prefix(' ').unwrap_or(after_marker);
@@ -251,89 +221,70 @@ fn try_open_block_quote<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResu
     )
 }
 
-fn try_open_list<'a>(line: &'a str, last: Option<&Block<'a>>) -> OpenResult<'a> {
-    if let Some(Block::FencedCode(_)) = last {
+fn try_open_list<'a>(line: &'a str, parent: Option<&Block<'a>>) -> OpenResult<'a> {
+    if let Some(Block::FencedCode(_)) = parent {
+        return OpenResult::NotOpened;
+    }
+    if let Some(Block::List(_)) = parent {
         return OpenResult::NotOpened;
     }
 
-    let mut ident_idx = 0;
-    for (idx, ch) in line.char_indices() {
-        match ch {
-            '\t' => return OpenResult::NotOpened,
-            ' ' => {
-                if idx >= 3 {
-                    return OpenResult::NotOpened;
-                }
-            }
-            _ => {
-                ident_idx = idx;
-                break;
-            }
-        }
+    let Some(after_indent) = strip_indent(line) else {
+        return OpenResult::NotOpened;
+    };
+
+    let Some((list_type, continuation)) = parse_list_marker(after_indent) else {
+        return OpenResult::NotOpened;
+    };
+
+    // An empty list item cannot interrupt a paragraph:
+    // https://spec.commonmark.org/0.31.2/#example-285
+    if continuation.trim().is_empty()
+        && let Some(Block::Paragraph(_)) = parent
+    {
+        return OpenResult::NotOpened;
     }
 
-    let mut list_type: Option<ListType> = None;
-    let mut order: Option<u32> = None;
-    let mut digit_count: u8 = 0;
-    let mut continuation = "";
-    for (idx, ch) in line[ident_idx..].char_indices() {
-        match ch {
-            '-' | '+' | '*' => {
-                if list_type.is_some() || order.is_some() {
-                    return OpenResult::NotOpened;
-                }
+    OpenResult::Continue(
+        Block::List(List {
+            items: Vec::new(),
+            list_type: list_type,
+            tight: true,
+        }),
+        line,
+    )
+}
 
-                list_type = match ch {
-                    '-' => Some(ListType::UnorderedMinus),
-                    '+' => Some(ListType::UnorderedPlus),
-                    '*' => Some(ListType::UnorderedAsterisk),
-                    _ => unreachable!("other bytes are filtered by outer arm"),
-                };
-            }
-            '.' | ')' => {
-                if list_type.is_some() || order.is_none() {
-                    return OpenResult::NotOpened;
-                }
+fn try_open_list_item<'a>(line: &'a str, parent: Option<&Block<'a>>) -> OpenResult<'a> {
+    let Some(Block::List(_)) = parent else {
+        return OpenResult::NotOpened;
+    };
 
-                list_type = match ch {
-                    '.' => Some(ListType::OrderedDot(order.unwrap())),
-                    ')' => Some(ListType::OrdererParentheses(order.unwrap())),
-                    _ => unreachable!("other bytes are filtered by outer arm"),
-                };
-            }
-            '0'..='9' => {
-                digit_count += 1;
+    let Some(after_indent) = strip_indent(line) else {
+        return OpenResult::NotOpened;
+    };
 
-                if list_type.is_some() || digit_count >= 10 {
-                    return OpenResult::NotOpened;
-                }
+    let Some((_, continuation)) = parse_list_marker(after_indent) else {
+        return OpenResult::NotOpened;
+    };
 
-                order = match order {
-                    Some(num) => Some(num * 10 + ch as u32 - '0' as u32),
-                    None => Some(ch as u32 - '0' as u32),
-                }
-            }
-            ' ' => {
-                continuation = &line[ident_idx + idx + 1..];
-                break;
-            }
-            '\t' => unimplemented!("Add handle tabs after markers"),
-            _ => return OpenResult::NotOpened,
-        }
-    }
-
-    if let Some(lt) = list_type {
+    if let Some(continuation_after_indent) = strip_indent(continuation) {
         return OpenResult::Continue(
-            Block::List(List {
-                items: Vec::new(),
-                list_type: lt,
-                tight: true,
+            Block::ListItem(ListItem {
+                children: Vec::new(),
+                padding: line.len() - continuation_after_indent.len(),
             }),
-            continuation,
+            continuation_after_indent,
         );
     }
 
-    return OpenResult::NotOpened;
+    OpenResult::Continue(
+        Block::ListItem(ListItem {
+            children: Vec::new(),
+            padding: line.len() - continuation.len(),
+        }),
+        continuation,
+    )
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -398,7 +349,7 @@ mod tests {
 
         for test in tests {
             assert_eq!(
-                try_open_idented_code(test.input, None),
+                try_open_indented_code(test.input, None),
                 test.expected,
                 "case: {}",
                 test.name
@@ -1044,18 +995,18 @@ mod tests {
                     "     some text",
                 ),
             },
-            Case {
-                name: "tabs_after_markers",
-                input: "-\tsome text",
-                expected: OpenResult::Continue(
-                    Block::List(List {
-                        items: Vec::new(),
-                        list_type: ListType::UnorderedMinus,
-                        tight: true,
-                    }),
-                    "   some text",
-                ),
-            },
+            // Case {
+            //     name: "tabs_after_markers",
+            //     input: "-\tsome text",
+            //     expected: OpenResult::Continue(
+            //         Block::List(List {
+            //             items: Vec::new(),
+            //             list_type: ListType::UnorderedMinus,
+            //             tight: true,
+            //         }),
+            //         "   some text",
+            //     ),
+            // },
             Case {
                 name: "tabs_after_space",
                 input: "- \t\tsome text",

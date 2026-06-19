@@ -1,12 +1,16 @@
+mod continuers;
 pub mod errors;
 mod openers;
+mod utils;
 
 use super::block::*;
 use super::document;
+use continuers::{ContinueResult, try_continue};
 use openers::{OpenResult, try_open};
 // use super::inline::*;
 use errors::ParserError;
 use std::collections::HashMap;
+use std::fmt::format;
 use std::vec;
 
 pub fn parse<'a>(input: &'a str) -> Result<document::Document<'a>, ParserError> {
@@ -66,7 +70,7 @@ impl<'a> Parser<'a> {
         let mut continuation = line;
         let mut close_from = 0;
         for block in self.stack.iter() {
-            match self.try_continue(block, continuation) {
+            match try_continue(block, continuation) {
                 ContinueResult::Continue(s) => {
                     continuation = s;
                     close_from += 1;
@@ -80,17 +84,14 @@ impl<'a> Parser<'a> {
         }
 
         // New block opening
-        let mut last = if close_from > 0 {
-            Some(&self.stack[close_from - 1])
-        } else {
-            None
-        };
+        let mut parent = self.stack[0..close_from].last();
 
         let mut opened_blocks = Vec::new();
         loop {
-            match try_open(continuation, last) {
+            match try_open(continuation, parent) {
                 OpenResult::Continue(b, l) => {
                     opened_blocks.push(b);
+                    parent = opened_blocks.last();
                     continuation = l;
                 }
                 OpenResult::Opened(b) => {
@@ -101,7 +102,6 @@ impl<'a> Parser<'a> {
                 }
                 OpenResult::NotOpened => break,
             }
-            last = None;
         }
 
         if !opened_blocks.is_empty() {
@@ -120,7 +120,7 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
-        self.close_from(close_from)?;
+        // self.close_from(close_from)?;
 
         // Remaning line handling
         if let Some(b) = self.stack.last_mut() {
@@ -152,73 +152,6 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn try_continue(&self, block: &Block, line: &'a str) -> ContinueResult<'a> {
-        match block {
-            Block::ThematicBreak | Block::ATXHeading(_) | Block::Paragraph(_) => {
-                ContinueResult::NotContinue
-            }
-            Block::LinkReference(_) => unimplemented!(),
-            Block::List(_) => unimplemented!(),
-            Block::ListItem(_) => unimplemented!(),
-            Block::IndentedCode(_) => self.try_continue_indented_code(line),
-            Block::FencedCode(fc) => self.try_continue_fenced_code(fc, line),
-            Block::BlockQuote(_) => self.try_continue_blockquote(line),
-        }
-    }
-
-    fn try_continue_indented_code(&self, line: &'a str) -> ContinueResult<'a> {
-        match line.strip_prefix("    ") {
-            Some(s) => ContinueResult::Continue(s),
-            None => ContinueResult::NotContinue,
-        }
-    }
-
-    fn try_continue_fenced_code(&self, fc: &FencedCode, line: &'a str) -> ContinueResult<'a> {
-        let after_indent = line.trim_start_matches(' ');
-        let indent_size = line.len() - after_indent.len();
-        if indent_size > 3 {
-            return ContinueResult::Continue(line);
-        }
-
-        let after_tabs = after_indent.trim_start_matches('\t');
-        if after_tabs.len() < after_indent.len() {
-            return ContinueResult::Continue(line);
-        }
-
-        let fence_type: FenceType;
-        let fence_occ: usize;
-        let mut after_fence = after_tabs.trim_start_matches('~');
-        if after_fence.len() == after_tabs.len() {
-            after_fence = after_tabs.trim_start_matches('`');
-            if after_fence.len() == after_tabs.len() {
-                return ContinueResult::Continue(line);
-            }
-
-            fence_type = FenceType::Backtick;
-        } else {
-            fence_type = FenceType::Tilda;
-        }
-
-        fence_occ = after_tabs.len() - after_fence.len();
-
-        // Closing sequence found
-        if fence_type == fc.fence_type && fence_occ >= fc.fence_occ {
-            return ContinueResult::Close;
-        }
-
-        ContinueResult::Continue(line)
-    }
-
-    fn try_continue_blockquote(&self, line: &'a str) -> ContinueResult<'a> {
-        match line.strip_prefix(">") {
-            Some(after_marker) => match after_marker.strip_prefix(" ") {
-                Some(after_space) => ContinueResult::Continue(after_space),
-                None => ContinueResult::Continue(after_marker),
-            },
-            None => ContinueResult::NotContinue,
-        }
-    }
-
     /// Closes open blocks on the stack starting from particular index inclusively
     fn close_from(&mut self, idx: usize) -> Result<(), ParserError> {
         if self.stack.len() == 0 || idx == self.stack.len() {
@@ -229,10 +162,10 @@ impl<'a> Parser<'a> {
         for _ in 0..num_iters {
             let last = self.stack.pop().unwrap();
 
-            if let Block::LinkReference(lr) = last {
-                self.links.insert(lr.label, lr);
-                continue;
-            }
+            // if let Block::LinkReference(lr) = last {
+            //     self.links.insert(lr.label, lr);
+            //     continue;
+            // }
 
             let Some(prev_to_last) = self.stack.last_mut() else {
                 // current last was the top most in the open blocks stack,
@@ -242,8 +175,21 @@ impl<'a> Parser<'a> {
             };
 
             match prev_to_last {
-                Block::BlockQuote(children) => {
-                    children.push(last);
+                Block::BlockQuote(bq) => {
+                    bq.children.push(last);
+                }
+                Block::List(list) => {
+                    let Block::ListItem(li) = last else {
+                        return Err(ParserError::InvalidChild {
+                            parent: format!("{:?}", prev_to_last),
+                            child: format!("{:?}", last),
+                        });
+                    };
+
+                    list.items.push(li);
+                }
+                Block::ListItem(li) => {
+                    li.children.push(last);
                 }
                 _ => {
                     return Err(ParserError::InvalidContainer {
@@ -261,13 +207,6 @@ impl<'a> Into<document::Document<'a>> for Parser<'a> {
     fn into(self) -> document::Document<'a> {
         document::Document::from(self.doc)
     }
-}
-
-#[derive(PartialEq, Debug, Clone)]
-enum ContinueResult<'a> {
-    Continue(&'a str),
-    NotContinue,
-    Close,
 }
 
 // fn process_inline(ic: &mut InlineContent) -> Result<(), ParserError> {

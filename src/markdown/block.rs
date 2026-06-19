@@ -9,7 +9,7 @@ pub enum Block<'a> {
     IndentedCode(IndentedCode<'a>),
     FencedCode(FencedCode<'a>),
     // HTML(&'a str),
-    LinkReference(LinkReference<'a>),
+    // LinkReference(LinkReference<'a>),
     Paragraph(InlineContent<'a>),
 
     // Container Blocks
@@ -61,12 +61,6 @@ pub struct BlockQuote<'a> {
     pub children: Vec<Block<'a>>,
 }
 
-impl<'a> BlockQuote<'a> {
-    pub fn push(&mut self, b: Block<'a>) {
-        self.children.push(b);
-    }
-}
-
 // #[derive(PartialEq, Debug)]
 // pub enum SetextHeadingLevel {
 //     H1,
@@ -80,6 +74,12 @@ pub enum ListType {
     UnorderedMinus,
     UnorderedPlus,
     UnorderedAsterisk,
+}
+
+impl ListType {
+    pub fn same_variant(&self, other: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]

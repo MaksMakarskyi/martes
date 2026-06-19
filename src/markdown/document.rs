@@ -36,7 +36,7 @@ impl<'a> Document<'a> {
             Block::IndentedCode(ic) => self.indented_code_to_html(ic),
             Block::FencedCode(fc) => self.fenced_code_to_html(fc),
             Block::Paragraph(ic) => self.paragraph_to_html(ic),
-            Block::LinkReference(_) => String::new(),
+            // Block::LinkReference(_) => String::new(),
             Block::BlockQuote(bq) => self.block_quote_html(bq),
             Block::List(_) => String::new(),
             Block::ListItem(_) => String::new(),
