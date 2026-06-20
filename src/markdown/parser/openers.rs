@@ -920,7 +920,7 @@ mod tests {
                         list_type: ListType::OrderedDot(1),
                         tight: true,
                     }),
-                    "some text",
+                    "1. some text",
                 ),
             },
             Case {
@@ -932,7 +932,7 @@ mod tests {
                         list_type: ListType::OrdererParentheses(1),
                         tight: true,
                     }),
-                    "some text",
+                    "1) some text",
                 ),
             },
             Case {
@@ -944,7 +944,7 @@ mod tests {
                         list_type: ListType::UnorderedAsterisk,
                         tight: true,
                     }),
-                    "some text",
+                    "* some text",
                 ),
             },
             Case {
@@ -956,7 +956,7 @@ mod tests {
                         list_type: ListType::UnorderedMinus,
                         tight: true,
                     }),
-                    "some text",
+                    "- some text",
                 ),
             },
             Case {
@@ -968,7 +968,7 @@ mod tests {
                         list_type: ListType::UnorderedPlus,
                         tight: true,
                     }),
-                    "some text",
+                    "+ some text",
                 ),
             },
             Case {
@@ -980,7 +980,7 @@ mod tests {
                         list_type: ListType::UnorderedMinus,
                         tight: true,
                     }),
-                    "some text",
+                    "   - some text",
                 ),
             },
             Case {
@@ -992,21 +992,21 @@ mod tests {
                         list_type: ListType::UnorderedMinus,
                         tight: true,
                     }),
-                    "     some text",
+                    "-      some text",
                 ),
             },
-            // Case {
-            //     name: "tabs_after_markers",
-            //     input: "-\tsome text",
-            //     expected: OpenResult::Continue(
-            //         Block::List(List {
-            //             items: Vec::new(),
-            //             list_type: ListType::UnorderedMinus,
-            //             tight: true,
-            //         }),
-            //         "   some text",
-            //     ),
-            // },
+            Case {
+                name: "tabs_after_markers",
+                input: "-\tsome text",
+                expected: OpenResult::Continue(
+                    Block::List(List {
+                        items: Vec::new(),
+                        list_type: ListType::UnorderedMinus,
+                        tight: true,
+                    }),
+                    "-\tsome text",
+                ),
+            },
             Case {
                 name: "tabs_after_space",
                 input: "- \t\tsome text",
@@ -1016,7 +1016,7 @@ mod tests {
                         list_type: ListType::UnorderedMinus,
                         tight: true,
                     }),
-                    "\t\tsome text",
+                    "- \t\tsome text",
                 ),
             },
             Case {
@@ -1028,7 +1028,7 @@ mod tests {
                         list_type: ListType::OrdererParentheses(0),
                         tight: true,
                     }),
-                    "",
+                    "0)",
                 ),
             },
             Case {
@@ -1040,7 +1040,7 @@ mod tests {
                         list_type: ListType::UnorderedAsterisk,
                         tight: true,
                     }),
-                    "",
+                    "*",
                 ),
             },
             Case {
@@ -1052,7 +1052,7 @@ mod tests {
                         list_type: ListType::OrdererParentheses(12045),
                         tight: true,
                     }),
-                    "some text",
+                    "12045) some text",
                 ),
             },
             Case {
@@ -1064,7 +1064,7 @@ mod tests {
                         list_type: ListType::OrderedDot(3456789),
                         tight: true,
                     }),
-                    "some text",
+                    "003456789. some text",
                 ),
             },
         ];

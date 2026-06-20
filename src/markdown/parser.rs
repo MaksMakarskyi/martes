@@ -1,29 +1,25 @@
 mod continuers;
 pub mod errors;
+mod inline;
 mod openers;
 mod utils;
 
 use super::block::*;
-use super::document;
 use continuers::{ContinueResult, try_continue};
-use openers::{OpenResult, try_open};
-// use super::inline::*;
 use errors::ParserError;
-use std::collections::HashMap;
-use std::fmt::format;
+use inline::parse_inline;
+use openers::{OpenResult, try_open};
+// use std::collections::HashMap;
 use std::vec;
 
-pub fn parse<'a>(input: &'a str) -> Result<document::Document<'a>, ParserError> {
-    let mut parser = Parser::new();
-    parser.parse(input)?;
-
-    Ok(parser.into())
+pub fn parse<'a>(input: &'a str) -> Result<Vec<Block<'a>>, ParserError> {
+    Parser::new().parse(input)
 }
 
 struct Parser<'a> {
     doc: Vec<Block<'a>>,
     stack: Vec<Block<'a>>,
-    links: HashMap<&'a str, LinkReference<'a>>,
+    // links: HashMap<&'a str, LinkReference<'a>>,
 }
 
 impl<'a> Parser<'a> {
@@ -31,39 +27,19 @@ impl<'a> Parser<'a> {
         Parser {
             doc: Vec::new(),
             stack: Vec::new(),
-            links: HashMap::new(),
+            // links: HashMap::new(),
         }
     }
 
-    fn parse(&mut self, input: &'a str) -> Result<(), ParserError> {
+    fn parse(mut self, input: &'a str) -> Result<Vec<Block<'a>>, ParserError> {
         for line in input.lines() {
             self.parse_line(line)?;
         }
 
         self.close_from(0)?;
 
-        // let mut stack = Vec::new();
-        // for b in self.doc.iter_mut() {
-        //     stack.push(b);
-        // }
-
-        // while let Some(b) = stack.pop() {
-        //     match b {
-        //         Block::ThematicBreak => continue,
-        //         Block::LinkReference(_) => continue,
-        //         Block::ATXHeading(ah) => process_inline(&mut ah.content)?,
-        //         Block::Paragraph(ic) => process_inline(ic)?,
-        //         Block::IndentedCode(ic) => process_inline(&mut ic.content)?,
-        //         Block::FencedCode(fc) => process_inline(&mut fc.content)?,
-        //         Block::BlockQuote(bc) => {
-        //             for bc_b in bc.children.iter_mut() {
-        //                 stack.push(bc_b);
-        //             }
-        //         }
-        //     }
-        // }
-
-        Ok(())
+        parse_inline(&mut self.doc);
+        Ok(self.doc)
     }
 
     fn parse_line(&mut self, line: &'a str) -> Result<(), ParserError> {
@@ -85,7 +61,6 @@ impl<'a> Parser<'a> {
 
         // New block opening
         let mut parent = self.stack[0..close_from].last();
-
         let mut opened_blocks = Vec::new();
         loop {
             match try_open(continuation, parent) {
@@ -179,14 +154,14 @@ impl<'a> Parser<'a> {
                     bq.children.push(last);
                 }
                 Block::List(list) => {
-                    let Block::ListItem(li) = last else {
+                    let Block::ListItem(_) = last else {
                         return Err(ParserError::InvalidChild {
                             parent: format!("{:?}", prev_to_last),
                             child: format!("{:?}", last),
                         });
                     };
 
-                    list.items.push(li);
+                    list.items.push(last);
                 }
                 Block::ListItem(li) => {
                     li.children.push(last);
@@ -203,9 +178,9 @@ impl<'a> Parser<'a> {
     }
 }
 
-impl<'a> Into<document::Document<'a>> for Parser<'a> {
-    fn into(self) -> document::Document<'a> {
-        document::Document::from(self.doc)
+impl<'a> Into<Vec<Block<'a>>> for Parser<'a> {
+    fn into(self) -> Vec<Block<'a>> {
+        return self.doc;
     }
 }
 

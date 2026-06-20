@@ -84,7 +84,7 @@ impl ListType {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct List<'a> {
-    pub items: Vec<ListItem<'a>>,
+    pub items: Vec<Block<'a>>,
     pub list_type: ListType,
     pub tight: bool,
 }

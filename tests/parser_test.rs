@@ -1,6 +1,6 @@
 use std::env;
 
-use martes::markdown::parser::parse;
+use martes::{html::renderer::render_markdown, markdown::parser::parse};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -23,7 +23,7 @@ fn parser_spec_tests() {
 
     for c in cases.iter() {
         let res = match parse(&c.markdown) {
-            Ok(doc) => doc.to_html(),
+            Ok(doc) => render_markdown(doc),
             Err(err) => {
                 failures.push(format!(
                     "SPEC_TEST (example={}, section=\"{}\"):\n{:?}\n\nexpected: {:?}\n     got: {}",

@@ -1,7 +1,7 @@
 #[derive(PartialEq, Debug, Clone)]
 pub enum Inline<'a> {
     CodeSpan(&'a str),
-    Emphasis(&'a str, EmphasisType),
+    Emphasis(Emphasis<'a>),
     Link(Link<'a>),
     Image(Image<'a>),
     Autolink(&'a str),
@@ -17,14 +17,21 @@ pub enum EmphasisType {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct Emphasis<'a> {
+    pub text: &'a str,
+    pub emphasis_type: EmphasisType,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub struct Link<'a> {
-    text: &'a str,
-    url: &'a str,
+    pub text: &'a str,
+    pub url: &'a str,
+    pub title: Option<&'a str>,
 }
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Image<'a> {
-    url: &'a str,
-    alt: &'a str,
-    title: &'a str,
+    pub src: &'a str,
+    pub alt: &'a str,
+    pub title: Option<&'a str>,
 }

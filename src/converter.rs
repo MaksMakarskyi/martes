@@ -1,6 +1,7 @@
 pub mod errors;
 
 use super::config;
+use super::html::renderer;
 use super::markdown::parser;
 use errors::ConverterError;
 use std::{
@@ -24,7 +25,9 @@ impl Converter {
 
         let md_doc = parser::parse(&res)?;
         println!("{:?}", md_doc);
-        self.save_file(&md_doc.to_html())
+
+        let html = renderer::render_markdown(md_doc);
+        self.save_file(&html)
     }
 
     fn save_file(&self, output: &str) -> Result<(), ConverterError> {
